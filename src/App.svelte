@@ -406,7 +406,7 @@
 
           <section>
             <h3>Check-in note</h3>
-            <textarea bind:value={quickNote} rows="3" placeholder="Add updates for the care team and family." />
+            <textarea bind:value={quickNote} rows="3" placeholder="Add updates for the care team and family."></textarea>
             <button type="button" on:click={saveQuickNote}>Save note</button>
           </section>
         {:else if activeView === 'schedule' && currentUser.role === 'caretaker'}
@@ -493,7 +493,7 @@
               bind:value={checkOutNote}
               rows="4"
               placeholder="Document symptoms, appetite, mood, follow-up needs, and handoff instructions."
-            />
+            ></textarea>
             <button type="button" on:click={completeCheckout}>Submit check-out</button>
           </section>
         {:else}
@@ -554,7 +554,7 @@
               bind:value={familyNote}
               rows="3"
               placeholder="Add follow-up requests or clarification for upcoming shifts."
-            />
+            ></textarea>
             <button type="button" on:click={saveFamilyNote}>Save note</button>
           </section>
         {/if}
