@@ -1,7 +1,18 @@
 <script>
   const weekDays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-  const timeSlots = ['Morning', 'Afternoon', 'Evening']
   const baseCaretakers = ['Avery', 'Jordan', 'Priya', 'Sam']
+  const scheduleStartHour = 6
+  const scheduleEndHour = 22
+  const scheduleIntervalMinutes = 30
+  const totalScheduleSlots = ((scheduleEndHour - scheduleStartHour) * 60) / scheduleIntervalMinutes
+  const calendarSlotHeight = 26
+  const caretakerSwatches = [
+    { background: 'oklch(0.78 0.08 155)', foreground: 'oklch(0.23 0.03 155)' },
+    { background: 'oklch(0.82 0.11 50)', foreground: 'oklch(0.26 0.05 40)' },
+    { background: 'oklch(0.8 0.05 240)', foreground: 'oklch(0.22 0.03 240)' },
+    { background: 'oklch(0.83 0.08 90)', foreground: 'oklch(0.28 0.04 80)' },
+    { background: 'oklch(0.78 0.12 15)', foreground: 'oklch(0.95 0.02 80)' },
+  ]
 
   let loginName = ''
   let selectedRole = 'caretaker'
@@ -10,6 +21,10 @@
   let quickNote = ''
   let familyNote = ''
   let checkOutNote = ''
+  let selectedScheduleDay = weekDays[0]
+  let selectedScheduleCaretaker = baseCaretakers[0]
+  let selectedStartSlot = hourToSlot(8)
+  let selectedEndSlot = hourToSlot(12)
 
   let tasks = [
     {
@@ -79,7 +94,20 @@
   $: completedTasks = tasks.filter((task) => task.completed)
   $: incompleteTasks = tasks.filter((task) => !task.completed)
   $: completionRate = Math.round((completedTasks.length / tasks.length) * 100)
-  $: reservedSlots = Object.values(schedule).filter(Boolean).length
+  $: assignedHalfHourSlots = Object.values(schedule).filter(Boolean).length
+  $: availableCaretakers = getCaretakerRoster()
+  $: slotIndices = Array.from({ length: totalScheduleSlots }, (_, index) => index)
+  $: startTimeOptions = slotIndices
+  $: endTimeOptions = Array.from({ length: totalScheduleSlots }, (_, index) => index + 1)
+  $: scheduleBlocksByDay = Object.fromEntries(weekDays.map((day) => [day, getScheduleBlocksForDay(day)]))
+  $: scheduledBlocks = weekDays.reduce((count, day) => count + scheduleBlocksByDay[day].length, 0)
+  $: reservedSlots = assignedHalfHourSlots
+  $: if (!availableCaretakers.includes(selectedScheduleCaretaker)) {
+    selectedScheduleCaretaker = availableCaretakers[0] ?? ''
+  }
+  $: if (selectedEndSlot <= selectedStartSlot) {
+    selectedEndSlot = Math.min(totalScheduleSlots, selectedStartSlot + 1)
+  }
 
   function makeId() {
     if (typeof crypto !== 'undefined' && crypto.randomUUID) {
@@ -88,24 +116,35 @@
     return `${Date.now()}-${Math.random().toString(16).slice(2)}`
   }
 
+  function hourToSlot(hourValue) {
+    return ((hourValue - scheduleStartHour) * 60) / scheduleIntervalMinutes
+  }
+
   function initializeSchedule() {
     const seed = {}
 
     for (const day of weekDays) {
-      for (const slot of timeSlots) {
-        seed[scheduleKey(day, slot)] = ''
+      for (let slotIndex = 0; slotIndex < totalScheduleSlots; slotIndex += 1) {
+        seed[scheduleKey(day, slotIndex)] = ''
       }
     }
 
-    seed[scheduleKey('Monday', 'Morning')] = 'Avery'
-    seed[scheduleKey('Monday', 'Evening')] = 'Sam'
-    seed[scheduleKey('Tuesday', 'Afternoon')] = 'Jordan'
-    seed[scheduleKey('Friday', 'Morning')] = 'Priya'
+    setScheduleRange(seed, 'Monday', hourToSlot(8), hourToSlot(12), 'Avery')
+    setScheduleRange(seed, 'Monday', hourToSlot(17), hourToSlot(21), 'Sam')
+    setScheduleRange(seed, 'Tuesday', hourToSlot(12), hourToSlot(16), 'Jordan')
+    setScheduleRange(seed, 'Friday', hourToSlot(8), hourToSlot(12), 'Priya')
+
     schedule = seed
   }
 
-  function scheduleKey(day, slot) {
-    return `${day}-${slot}`
+  function setScheduleRange(targetSchedule, day, startSlot, endSlot, assignee) {
+    for (let slotIndex = startSlot; slotIndex < endSlot; slotIndex += 1) {
+      targetSchedule[scheduleKey(day, slotIndex)] = assignee
+    }
+  }
+
+  function scheduleKey(day, slotIndex) {
+    return `${day}-${slotIndex}`
   }
 
   function getCaretakerRoster() {
@@ -119,6 +158,51 @@
       roster.push(currentUser.name)
     }
     return roster
+  }
+
+  function getScheduleBlocksForDay(day) {
+    const blocks = []
+    let activeCaretaker = ''
+    let activeStartSlot = 0
+
+    for (let slotIndex = 0; slotIndex <= totalScheduleSlots; slotIndex += 1) {
+      const assignee = slotIndex < totalScheduleSlots ? schedule[scheduleKey(day, slotIndex)] || '' : ''
+
+      if (assignee !== activeCaretaker) {
+        if (activeCaretaker) {
+          blocks.push({
+            id: `${day}-${activeStartSlot}-${slotIndex}-${activeCaretaker}`,
+            day,
+            caretaker: activeCaretaker,
+            startSlot: activeStartSlot,
+            endSlot: slotIndex,
+          })
+        }
+        activeCaretaker = assignee
+        activeStartSlot = slotIndex
+      }
+    }
+
+    return blocks
+  }
+
+  function getCaretakerSwatch(caretaker) {
+    const roster = getCaretakerRoster()
+    const caretIndex = roster.indexOf(caretaker)
+    return caretakerSwatches[(caretIndex < 0 ? 0 : caretIndex) % caretakerSwatches.length]
+  }
+
+  function formatScheduleTime(slotIndex) {
+    const normalizedSlot = Number(slotIndex)
+    const totalMinutes = scheduleStartHour * 60 + normalizedSlot * scheduleIntervalMinutes
+    const hour = Math.floor(totalMinutes / 60)
+    const minute = totalMinutes % 60
+    const time = new Date(2020, 0, 1, hour, minute)
+    return time.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+  }
+
+  function formatScheduleRange(startSlot, endSlot) {
+    return `${formatScheduleTime(startSlot)} - ${formatScheduleTime(endSlot)}`
   }
 
   function formatDateTime(value) {
@@ -235,23 +319,57 @@
     addActivity(`${currentUser.name} completed check-out${saved ? ' with a patient note.' : '.'}`)
   }
 
-  function reserveSlot(day, slot, assignee) {
+  function updateScheduleRange() {
+    const startSlot = Number(selectedStartSlot)
+    const endSlot = Number(selectedEndSlot)
+    if (!currentUser || endSlot <= startSlot) return
+
+    const nextSchedule = { ...schedule }
+    let hasChanges = false
+
+    for (let slotIndex = startSlot; slotIndex < endSlot; slotIndex += 1) {
+      const key = scheduleKey(selectedScheduleDay, slotIndex)
+      if (nextSchedule[key] !== selectedScheduleCaretaker) {
+        nextSchedule[key] = selectedScheduleCaretaker
+        hasChanges = true
+      }
+    }
+
+    if (!hasChanges) return
+
+    schedule = nextSchedule
+
+    if (selectedScheduleCaretaker) {
+      addActivity(
+        `${currentUser.name} updated schedule: ${selectedScheduleCaretaker} on ${selectedScheduleDay} ${formatScheduleRange(startSlot, endSlot)}.`
+      )
+    } else {
+      addActivity(
+        `${currentUser.name} cleared schedule on ${selectedScheduleDay} ${formatScheduleRange(startSlot, endSlot)}.`
+      )
+    }
+  }
+
+  function clearScheduleBlock(block) {
     if (!currentUser) return
 
-    const key = scheduleKey(day, slot)
-    const previousAssignee = schedule[key]
-    if (previousAssignee === assignee) return
+    const nextSchedule = { ...schedule }
+    let hasChanges = false
 
-    schedule = {
-      ...schedule,
-      [key]: assignee,
+    for (let slotIndex = block.startSlot; slotIndex < block.endSlot; slotIndex += 1) {
+      const key = scheduleKey(block.day, slotIndex)
+      if (nextSchedule[key]) {
+        nextSchedule[key] = ''
+        hasChanges = true
+      }
     }
 
-    if (assignee) {
-      addActivity(`${currentUser.name} reserved ${day} ${slot} for ${assignee}.`)
-    } else {
-      addActivity(`${currentUser.name} cleared reservation for ${day} ${slot}.`)
-    }
+    if (!hasChanges) return
+
+    schedule = nextSchedule
+    addActivity(
+      `${currentUser.name} removed ${block.caretaker}'s block on ${block.day} ${formatScheduleRange(block.startSlot, block.endSlot)}.`
+    )
   }
 </script>
 
@@ -412,49 +530,114 @@
         {:else if activeView === 'schedule' && currentUser.role === 'caretaker'}
           <h2>Caretaker Weekly Schedule</h2>
           <p class="lead">
-            Reserve each day part to clarify who is on point for morning, afternoon, and evening coverage.
+            Assign half-hour blocks and view coverage in a weekly calendar layout with caretaker color coding.
           </p>
-          <p class="meta">{reservedSlots} of {weekDays.length * timeSlots.length} slots currently assigned.</p>
+          <p class="meta">{assignedHalfHourSlots} of {totalScheduleSlots * weekDays.length} half-hour slots assigned.</p>
+
+          <section class="schedule-form">
+            <h3>Update schedule block</h3>
+            <div class="schedule-controls">
+              <label>
+                Day
+                <select bind:value={selectedScheduleDay}>
+                  {#each weekDays as day}
+                    <option value={day}>{day}</option>
+                  {/each}
+                </select>
+              </label>
+              <label>
+                Caretaker
+                <select bind:value={selectedScheduleCaretaker}>
+                  <option value="">Clear assignment</option>
+                  {#each availableCaretakers as caretaker}
+                    <option value={caretaker}>{caretaker}</option>
+                  {/each}
+                </select>
+              </label>
+              <label>
+                Start
+                <select bind:value={selectedStartSlot}>
+                  {#each startTimeOptions as slot}
+                    <option value={slot}>{formatScheduleTime(slot)}</option>
+                  {/each}
+                </select>
+              </label>
+              <label>
+                End
+                <select bind:value={selectedEndSlot}>
+                  {#each endTimeOptions as slot}
+                    {#if slot > selectedStartSlot}
+                      <option value={slot}>{formatScheduleTime(slot)}</option>
+                    {/if}
+                  {/each}
+                </select>
+              </label>
+            </div>
+            <div class="schedule-actions">
+              <button type="button" on:click={updateScheduleRange}>Apply block</button>
+              <p class="meta">
+                Selected: {selectedScheduleDay} {formatScheduleRange(selectedStartSlot, selectedEndSlot)}
+              </p>
+            </div>
+          </section>
+
+          <section class="schedule-legend">
+            {#each availableCaretakers as caretaker}
+              {@const swatch = getCaretakerSwatch(caretaker)}
+              <span
+                class="legend-item"
+                style={`--legend-bg:${swatch.background}; --legend-fg:${swatch.foreground};`}
+              >
+                {caretaker}
+              </span>
+            {/each}
+          </section>
 
           <div class="schedule-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Day</th>
-                  {#each timeSlots as slot}
-                    <th>{slot}</th>
-                  {/each}
-                </tr>
-              </thead>
-              <tbody>
+            <div
+              class="calendar-grid"
+              style={`--slot-height:${calendarSlotHeight}px; --slot-count:${totalScheduleSlots};`}
+            >
+              <div class="calendar-header">
+                <div class="time-head">Time</div>
                 {#each weekDays as day}
-                  <tr>
-                    <th>{day}</th>
-                    {#each timeSlots as slot}
-                      {@const key = scheduleKey(day, slot)}
-                      <td>
-                        <select
-                          value={schedule[key]}
-                          on:change={(event) => reserveSlot(day, slot, event.currentTarget.value)}
-                        >
-                          <option value="">Unassigned</option>
-                          {#each getCaretakerRoster() as caretaker}
-                            <option value={caretaker}>{caretaker}</option>
-                          {/each}
-                        </select>
-                        <p class="meta">
-                          {#if schedule[key]}
-                            Reserved for {schedule[key]}
-                          {:else}
-                            Open
-                          {/if}
-                        </p>
-                      </td>
-                    {/each}
-                  </tr>
+                  <div class="day-head">{day}</div>
                 {/each}
-              </tbody>
-            </table>
+              </div>
+
+              <div class="calendar-body">
+                <div class="time-column">
+                  {#each slotIndices as slotIndex}
+                    <div class="time-cell">
+                      {#if slotIndex % 2 === 0}
+                        {formatScheduleTime(slotIndex)}
+                      {/if}
+                    </div>
+                  {/each}
+                </div>
+
+                {#each weekDays as day}
+                  <div class="day-column">
+                    {#each slotIndices as slotIndex}
+                      <div class="slot-line"></div>
+                    {/each}
+                    {#each scheduleBlocksByDay[day] as block (block.id)}
+                      {@const swatch = getCaretakerSwatch(block.caretaker)}
+                      <button
+                        type="button"
+                        class="calendar-block"
+                        on:click={() => clearScheduleBlock(block)}
+                        style={`--block-top:${block.startSlot}; --block-height:${block.endSlot - block.startSlot}; --block-bg:${swatch.background}; --block-fg:${swatch.foreground};`}
+                        title={`Click to clear ${block.caretaker} on ${day} ${formatScheduleRange(block.startSlot, block.endSlot)}`}
+                      >
+                        <span>{block.caretaker}</span>
+                        <small>{formatScheduleRange(block.startSlot, block.endSlot)}</small>
+                      </button>
+                    {/each}
+                  </div>
+                {/each}
+              </div>
+            </div>
           </div>
         {:else if activeView === 'checkout' && currentUser.role === 'caretaker'}
           <h2>Caretaker Check-out</h2>

@@ -411,34 +411,149 @@ button.active {
 
 .schedule-wrap {
   overflow-x: auto;
-}
-
-table {
-  width: 100%;
-  border-collapse: collapse;
-  border-radius: var(--radius-xl);
-  overflow: hidden;
-}
-
-th,
-td {
   border: 1px solid var(--color-border);
-  padding: 0.6rem;
-  text-align: left;
-  vertical-align: top;
-}
-
-th {
-  background: var(--color-secondary);
-  color: var(--color-secondary-foreground);
-}
-
-td {
+  border-radius: var(--radius-xl);
   background: var(--color-card);
 }
 
-td select {
-  margin-bottom: 0.35rem;
+.schedule-form {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  padding: 0.9rem;
+  background: linear-gradient(165deg, var(--color-secondary), var(--color-card));
+  display: grid;
+  gap: 0.8rem;
+}
+
+.schedule-controls {
+  display: grid;
+  gap: 0.7rem;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.schedule-controls label {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.schedule-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.7rem;
+}
+
+.schedule-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.legend-item {
+  --legend-bg: var(--color-muted);
+  --legend-fg: var(--color-foreground);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border-radius: 999px;
+  padding: 0.3rem 0.6rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  background: var(--legend-bg);
+  color: var(--legend-fg);
+}
+
+.calendar-grid {
+  --slot-height: 26px;
+  --slot-count: 32;
+  min-width: 920px;
+}
+
+.calendar-header {
+  display: grid;
+  grid-template-columns: 90px repeat(7, minmax(0, 1fr));
+}
+
+.time-head,
+.day-head {
+  border-right: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-secondary);
+  color: var(--color-secondary-foreground);
+  padding: 0.55rem;
+  font-weight: 600;
+}
+
+.day-head:last-child {
+  border-right: none;
+}
+
+.calendar-body {
+  display: grid;
+  grid-template-columns: 90px repeat(7, minmax(0, 1fr));
+}
+
+.time-column {
+  border-right: 1px solid var(--color-border);
+}
+
+.time-cell {
+  height: var(--slot-height);
+  padding: 0.18rem 0.45rem;
+  border-bottom: 1px solid oklch(0.9 0.015 85 / 70%);
+  font-size: 0.73rem;
+  color: var(--color-muted-foreground);
+}
+
+.day-column {
+  position: relative;
+  border-right: 1px solid var(--color-border);
+  height: calc(var(--slot-height) * var(--slot-count));
+}
+
+.day-column:last-child {
+  border-right: none;
+}
+
+.slot-line {
+  height: var(--slot-height);
+  border-bottom: 1px solid oklch(0.9 0.015 85 / 70%);
+}
+
+.calendar-block {
+  --block-top: 0;
+  --block-height: 1;
+  --block-bg: var(--color-primary);
+  --block-fg: var(--color-primary-foreground);
+  position: absolute;
+  left: 0.2rem;
+  right: 0.2rem;
+  top: calc(var(--block-top) * var(--slot-height));
+  height: calc(var(--block-height) * var(--slot-height));
+  border: 1px solid oklch(0.2 0.02 70 / 15%);
+  border-radius: var(--radius-md);
+  background: var(--block-bg);
+  color: var(--block-fg);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 0.08rem;
+  padding: 0.22rem 0.35rem;
+  text-align: left;
+  overflow: hidden;
+}
+
+.calendar-block span {
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.05;
+}
+
+.calendar-block small {
+  font-size: 0.66rem;
+  line-height: 1.05;
+  opacity: 0.9;
 }
 
 .side-panel {
@@ -479,5 +594,14 @@ td select {
 
   .actions {
     justify-content: flex-start;
+  }
+
+  .schedule-controls {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .schedule-actions {
+    flex-direction: column;
+    align-items: flex-start;
   }
 }
