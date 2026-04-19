@@ -1,11 +1,18 @@
 <script>
+  import WeeklyCalendar from './lib/WeeklyCalendar.svelte'
+  import * as ICAL from 'ical.js'
+
   const weekDays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+  const dayIndexByName = Object.fromEntries(weekDays.map((day, index) => [day, index]))
   const baseCaretakers = ['Avery', 'Jordan', 'Priya', 'Sam']
   const scheduleStartHour = 6
   const scheduleEndHour = 22
   const scheduleIntervalMinutes = 30
   const totalScheduleSlots = ((scheduleEndHour - scheduleStartHour) * 60) / scheduleIntervalMinutes
-  const calendarSlotHeight = 26
+  const millisecondsPerDay = 24 * 60 * 60 * 1000
+  const scheduleSlotMilliseconds = scheduleIntervalMinutes * 60 * 1000
+  const scheduleMinTime = `${String(scheduleStartHour).padStart(2, '0')}:00:00`
+  const scheduleMaxTime = `${String(scheduleEndHour).padStart(2, '0')}:00:00`
   const caretakerSwatches = [
     { background: 'oklch(0.78 0.08 155)', foreground: 'oklch(0.23 0.03 155)' },
     { background: 'oklch(0.82 0.11 50)', foreground: 'oklch(0.26 0.05 40)' },
@@ -25,6 +32,9 @@
   let selectedScheduleCaretaker = baseCaretakers[0]
   let selectedStartSlot = hourToSlot(8)
   let selectedEndSlot = hourToSlot(12)
+  let scheduleWeekStart = getStartOfWeek(new Date())
+  let scheduleIcs = ''
+  let calendarEvents = []
 
   let tasks = [
     {
@@ -96,17 +106,18 @@
   $: completionRate = Math.round((completedTasks.length / tasks.length) * 100)
   $: assignedHalfHourSlots = Object.values(schedule).filter(Boolean).length
   $: availableCaretakers = getCaretakerRoster()
-  $: slotIndices = Array.from({ length: totalScheduleSlots }, (_, index) => index)
-  $: startTimeOptions = slotIndices
+  $: startTimeOptions = Array.from({ length: totalScheduleSlots }, (_, index) => index)
   $: endTimeOptions = Array.from({ length: totalScheduleSlots }, (_, index) => index + 1)
-  $: scheduleBlocksByDay = Object.fromEntries(weekDays.map((day) => [day, getScheduleBlocksForDay(day)]))
-  $: scheduledBlocks = weekDays.reduce((count, day) => count + scheduleBlocksByDay[day].length, 0)
+  $: scheduleBlocks = weekDays.flatMap((day) => getScheduleBlocksForDay(day))
+  $: scheduledBlocks = scheduleBlocks.length
   $: reservedSlots = assignedHalfHourSlots
+  $: scheduleIcs = buildIcsFromBlocks(scheduleBlocks)
+  $: calendarEvents = mapIcsToCalendarEvents(scheduleIcs)
   $: if (!availableCaretakers.includes(selectedScheduleCaretaker)) {
     selectedScheduleCaretaker = availableCaretakers[0] ?? ''
   }
   $: if (selectedEndSlot <= selectedStartSlot) {
-    selectedEndSlot = Math.min(totalScheduleSlots, selectedStartSlot + 1)
+    selectedEndSlot = Math.min(totalScheduleSlots, Number(selectedStartSlot) + 1)
   }
 
   function makeId() {
@@ -120,20 +131,36 @@
     return ((hourValue - scheduleStartHour) * 60) / scheduleIntervalMinutes
   }
 
-  function initializeSchedule() {
-    const seed = {}
+  function getStartOfWeek(inputDate) {
+    const date = new Date(inputDate)
+    const mondayOffset = (date.getDay() + 6) % 7
+    date.setDate(date.getDate() - mondayOffset)
+    date.setHours(0, 0, 0, 0)
+    return date
+  }
 
+  function startOfDay(date) {
+    const dayDate = new Date(date)
+    dayDate.setHours(0, 0, 0, 0)
+    return dayDate
+  }
+
+  function createEmptySchedule() {
+    const next = {}
     for (const day of weekDays) {
       for (let slotIndex = 0; slotIndex < totalScheduleSlots; slotIndex += 1) {
-        seed[scheduleKey(day, slotIndex)] = ''
+        next[scheduleKey(day, slotIndex)] = ''
       }
     }
+    return next
+  }
 
+  function initializeSchedule() {
+    const seed = createEmptySchedule()
     setScheduleRange(seed, 'Monday', hourToSlot(8), hourToSlot(12), 'Avery')
     setScheduleRange(seed, 'Monday', hourToSlot(17), hourToSlot(21), 'Sam')
     setScheduleRange(seed, 'Tuesday', hourToSlot(12), hourToSlot(16), 'Jordan')
     setScheduleRange(seed, 'Friday', hourToSlot(8), hourToSlot(12), 'Priya')
-
     schedule = seed
   }
 
@@ -167,7 +194,6 @@
 
     for (let slotIndex = 0; slotIndex <= totalScheduleSlots; slotIndex += 1) {
       const assignee = slotIndex < totalScheduleSlots ? schedule[scheduleKey(day, slotIndex)] || '' : ''
-
       if (assignee !== activeCaretaker) {
         if (activeCaretaker) {
           blocks.push({
@@ -184,6 +210,35 @@
     }
 
     return blocks
+  }
+
+  function slotToDate(day, slotIndex) {
+    const dayIndex = dayIndexByName[day]
+    const date = new Date(scheduleWeekStart)
+    date.setDate(date.getDate() + dayIndex)
+
+    const totalMinutes = scheduleStartHour * 60 + slotIndex * scheduleIntervalMinutes
+    const hour = Math.floor(totalMinutes / 60)
+    const minute = totalMinutes % 60
+    date.setHours(hour, minute, 0, 0)
+    return date
+  }
+
+  function getSchedulePointFromDate(date, roundMode = 'floor') {
+    const dayOffset = Math.floor((startOfDay(date).getTime() - scheduleWeekStart.getTime()) / millisecondsPerDay)
+    if (dayOffset < 0 || dayOffset >= weekDays.length) {
+      return null
+    }
+
+    const totalMinutes = date.getHours() * 60 + date.getMinutes()
+    const minutesFromStart = totalMinutes - scheduleStartHour * 60
+    const slotFloat = minutesFromStart / scheduleIntervalMinutes
+    const roundedSlot = roundMode === 'ceil' ? Math.ceil(slotFloat) : Math.floor(slotFloat)
+    const clampedSlot = Math.max(0, Math.min(totalScheduleSlots, roundedSlot))
+    return {
+      day: weekDays[dayOffset],
+      slotIndex: clampedSlot,
+    }
   }
 
   function getCaretakerSwatch(caretaker) {
@@ -203,6 +258,186 @@
 
   function formatScheduleRange(startSlot, endSlot) {
     return `${formatScheduleTime(startSlot)} - ${formatScheduleTime(endSlot)}`
+  }
+
+  function formatCalendarDateRange(start, end) {
+    return `${start.toLocaleDateString([], { weekday: 'long' })} ${start.toLocaleTimeString([], {
+      hour: 'numeric',
+      minute: '2-digit',
+    })} - ${end.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
+  }
+
+  function buildIcsUid(block) {
+    const caretakerSlug = block.caretaker.trim().toLowerCase().replace(/\s+/g, '-')
+    return `schedule-${block.day}-${block.startSlot}-${block.endSlot}-${caretakerSlug}@caretaker-scheduler.local`
+  }
+
+  function buildIcsFromBlocks(blocks) {
+    const calendar = new ICAL.Component(['vcalendar', [], []])
+    calendar.addPropertyWithValue('prodid', '-//Caretaker Scheduler//EN')
+    calendar.addPropertyWithValue('version', '2.0')
+    calendar.addPropertyWithValue('calscale', 'GREGORIAN')
+
+    for (const block of blocks) {
+      const eventComponent = new ICAL.Component('vevent')
+      eventComponent.addPropertyWithValue('uid', buildIcsUid(block))
+      eventComponent.addPropertyWithValue('summary', block.caretaker)
+      eventComponent.addPropertyWithValue('description', `Caretaker assignment for ${block.day}`)
+      eventComponent.addPropertyWithValue('dtstamp', ICAL.Time.fromJSDate(new Date(), true))
+      eventComponent.addPropertyWithValue('dtstart', ICAL.Time.fromJSDate(slotToDate(block.day, block.startSlot), false))
+      eventComponent.addPropertyWithValue('dtend', ICAL.Time.fromJSDate(slotToDate(block.day, block.endSlot), false))
+      calendar.addSubcomponent(eventComponent)
+    }
+
+    return calendar.toString()
+  }
+
+  function parseIcsEvents(icsText) {
+    if (!icsText.trim()) return []
+
+    try {
+      const parsed = ICAL.parse(icsText)
+      const calendar = new ICAL.Component(parsed)
+      const eventComponents = calendar.getAllSubcomponents('vevent')
+      return eventComponents
+        .map((eventComponent) => {
+          const event = new ICAL.Event(eventComponent)
+          const start = event.startDate?.toJSDate()
+          const end = event.endDate?.toJSDate()
+          if (!start || !end || end <= start) return null
+          return {
+            id: event.uid || makeId(),
+            caretaker: (event.summary || 'Unassigned').trim() || 'Unassigned',
+            start,
+            end,
+          }
+        })
+        .filter(Boolean)
+    } catch {
+      return []
+    }
+  }
+
+  function mapIcsToCalendarEvents(icsText) {
+    return parseIcsEvents(icsText).map((eventEntry) => {
+      const swatch = getCaretakerSwatch(eventEntry.caretaker)
+      return {
+        id: eventEntry.id,
+        title: eventEntry.caretaker,
+        start: eventEntry.start,
+        end: eventEntry.end,
+        backgroundColor: swatch.background,
+        borderColor: swatch.background,
+        textColor: swatch.foreground,
+        extendedProps: {
+          caretaker: eventEntry.caretaker,
+        },
+      }
+    })
+  }
+
+  function hydrateScheduleFromIcs(icsText, sourceLabel) {
+    const parsedEvents = parseIcsEvents(icsText)
+    if (!parsedEvents.length) return false
+
+    const importedWeekStart = getStartOfWeek(parsedEvents[0].start)
+    const nextSchedule = createEmptySchedule()
+
+    for (const eventEntry of parsedEvents) {
+      for (
+        let cursor = new Date(eventEntry.start);
+        cursor < eventEntry.end;
+        cursor = new Date(cursor.getTime() + scheduleSlotMilliseconds)
+      ) {
+        const point = getSchedulePointFromDate(
+          new Date(cursor.getTime() - (importedWeekStart.getTime() - scheduleWeekStart.getTime()))
+        )
+        if (!point || point.slotIndex >= totalScheduleSlots) continue
+        nextSchedule[scheduleKey(point.day, point.slotIndex)] = eventEntry.caretaker
+      }
+    }
+
+    scheduleWeekStart = importedWeekStart
+    schedule = nextSchedule
+
+    if (currentUser) {
+      addActivity(
+        `${currentUser.name} imported ${parsedEvents.length} schedule event${parsedEvents.length === 1 ? '' : 's'} from ${sourceLabel}.`
+      )
+    }
+
+    return true
+  }
+
+  function downloadScheduleIcs() {
+    const blob = new Blob([scheduleIcs], { type: 'text/calendar;charset=utf-8' })
+    const objectUrl = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    const mondayLabel = scheduleWeekStart.toISOString().slice(0, 10)
+    link.href = objectUrl
+    link.download = `caretaker-schedule-${mondayLabel}.ics`
+    link.click()
+    URL.revokeObjectURL(objectUrl)
+  }
+
+  async function importScheduleFile(event) {
+    const file = event.currentTarget.files?.[0]
+    if (!file) return
+    const fileContent = await file.text()
+    const didImport = hydrateScheduleFromIcs(fileContent, '.ics upload')
+    if (!didImport && currentUser) {
+      addActivity(`${currentUser.name} attempted to import an invalid .ics schedule file.`)
+    }
+    event.currentTarget.value = ''
+  }
+
+  function handleCalendarRangeSelect({ start, end }) {
+    if (!(start instanceof Date) || !(end instanceof Date)) return
+    prefillScheduleRangeFromCalendar(start, end)
+  }
+
+  function handleCalendarEventClick(calendarEvent) {
+    clearScheduleEvent(calendarEvent)
+  }
+
+  function prefillScheduleRangeFromCalendar(startDate, endDate) {
+    const startPoint = getSchedulePointFromDate(startDate, 'floor')
+    const endPoint = getSchedulePointFromDate(endDate, 'ceil')
+    if (!startPoint || !endPoint) return
+
+    selectedScheduleDay = startPoint.day
+    selectedStartSlot = Math.min(totalScheduleSlots - 1, startPoint.slotIndex)
+    if (startPoint.day === endPoint.day) {
+      selectedEndSlot = Math.max(selectedStartSlot + 1, endPoint.slotIndex)
+    } else {
+      selectedEndSlot = totalScheduleSlots
+    }
+  }
+
+  function clearScheduleEvent(calendarEvent) {
+    if (!currentUser || !calendarEvent.start || !calendarEvent.end) return
+
+    const nextSchedule = { ...schedule }
+    let hasChanges = false
+
+    for (
+      let cursor = new Date(calendarEvent.start);
+      cursor < calendarEvent.end;
+      cursor = new Date(cursor.getTime() + scheduleSlotMilliseconds)
+    ) {
+      const point = getSchedulePointFromDate(cursor, 'floor')
+      if (!point || point.slotIndex >= totalScheduleSlots) continue
+      const key = scheduleKey(point.day, point.slotIndex)
+      if (!nextSchedule[key]) continue
+      nextSchedule[key] = ''
+      hasChanges = true
+    }
+
+    if (!hasChanges) return
+    schedule = nextSchedule
+
+    const caretaker = calendarEvent.extendedProps?.caretaker || calendarEvent.title || 'a caretaker'
+    addActivity(`${currentUser.name} removed ${caretaker}'s block on ${formatCalendarDateRange(calendarEvent.start, calendarEvent.end)}.`)
   }
 
   function formatDateTime(value) {
@@ -348,28 +583,6 @@
         `${currentUser.name} cleared schedule on ${selectedScheduleDay} ${formatScheduleRange(startSlot, endSlot)}.`
       )
     }
-  }
-
-  function clearScheduleBlock(block) {
-    if (!currentUser) return
-
-    const nextSchedule = { ...schedule }
-    let hasChanges = false
-
-    for (let slotIndex = block.startSlot; slotIndex < block.endSlot; slotIndex += 1) {
-      const key = scheduleKey(block.day, slotIndex)
-      if (nextSchedule[key]) {
-        nextSchedule[key] = ''
-        hasChanges = true
-      }
-    }
-
-    if (!hasChanges) return
-
-    schedule = nextSchedule
-    addActivity(
-      `${currentUser.name} removed ${block.caretaker}'s block on ${block.day} ${formatScheduleRange(block.startSlot, block.endSlot)}.`
-    )
   }
 </script>
 
@@ -530,9 +743,13 @@
         {:else if activeView === 'schedule' && currentUser.role === 'caretaker'}
           <h2>Caretaker Weekly Schedule</h2>
           <p class="lead">
-            Assign half-hour blocks and view coverage in a weekly calendar layout with caretaker color coding.
+            The scheduler is stored as iCalendar (.ics) data and visualized in a weekly time-grid calendar. Select on
+            the calendar to prefill a block, then apply changes below.
           </p>
-          <p class="meta">{assignedHalfHourSlots} of {totalScheduleSlots * weekDays.length} half-hour slots assigned.</p>
+          <p class="meta">
+            {assignedHalfHourSlots} of {totalScheduleSlots * weekDays.length} half-hour slots assigned across
+            {scheduledBlocks} schedule block{scheduledBlocks === 1 ? '' : 's'}.
+          </p>
 
           <section class="schedule-form">
             <h3>Update schedule block</h3>
@@ -575,6 +792,11 @@
             </div>
             <div class="schedule-actions">
               <button type="button" on:click={updateScheduleRange}>Apply block</button>
+              <button type="button" class="ghost" on:click={downloadScheduleIcs}>Export .ics</button>
+              <label class="file-input">
+                <span>Import .ics</span>
+                <input type="file" accept=".ics,text/calendar" on:change={importScheduleFile} />
+              </label>
               <p class="meta">
                 Selected: {selectedScheduleDay} {formatScheduleRange(selectedStartSlot, selectedEndSlot)}
               </p>
@@ -594,50 +816,14 @@
           </section>
 
           <div class="schedule-wrap">
-            <div
-              class="calendar-grid"
-              style={`--slot-height:${calendarSlotHeight}px; --slot-count:${totalScheduleSlots};`}
-            >
-              <div class="calendar-header">
-                <div class="time-head">Time</div>
-                {#each weekDays as day}
-                  <div class="day-head">{day}</div>
-                {/each}
-              </div>
-
-              <div class="calendar-body">
-                <div class="time-column">
-                  {#each slotIndices as slotIndex}
-                    <div class="time-cell">
-                      {#if slotIndex % 2 === 0}
-                        {formatScheduleTime(slotIndex)}
-                      {/if}
-                    </div>
-                  {/each}
-                </div>
-
-                {#each weekDays as day}
-                  <div class="day-column">
-                    {#each slotIndices as slotIndex}
-                      <div class="slot-line"></div>
-                    {/each}
-                    {#each scheduleBlocksByDay[day] as block (block.id)}
-                      {@const swatch = getCaretakerSwatch(block.caretaker)}
-                      <button
-                        type="button"
-                        class="calendar-block"
-                        on:click={() => clearScheduleBlock(block)}
-                        style={`--block-top:${block.startSlot}; --block-height:${block.endSlot - block.startSlot}; --block-bg:${swatch.background}; --block-fg:${swatch.foreground};`}
-                        title={`Click to clear ${block.caretaker} on ${day} ${formatScheduleRange(block.startSlot, block.endSlot)}`}
-                      >
-                        <span>{block.caretaker}</span>
-                        <small>{formatScheduleRange(block.startSlot, block.endSlot)}</small>
-                      </button>
-                    {/each}
-                  </div>
-                {/each}
-              </div>
-            </div>
+            <WeeklyCalendar
+              events={calendarEvents}
+              weekStart={scheduleWeekStart}
+              slotMinTime={scheduleMinTime}
+              slotMaxTime={scheduleMaxTime}
+              onSelectRange={prefillScheduleRangeFromCalendar}
+              onEventClick={clearScheduleEvent}
+            />
           </div>
         {:else if activeView === 'checkout' && currentUser.role === 'caretaker'}
           <h2>Caretaker Check-out</h2>
